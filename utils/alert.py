@@ -1,13 +1,12 @@
 import os
 import requests
 
-DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK_URL")
 
 def send_discord_alert(message):
-    """ส่งแจ้งเตือนเข้า Discord Webhook"""
-    if not DISCORD_WEBHOOK:
+    url = os.getenv("DISCORD_WEBHOOK_URL")
+    if not url:
         return
     try:
-        requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=5)
-    except Exception as e:
-        print(f"⚠️ Discord alert error: {e}")
+        requests.post(url, json={"content": message[:2000]}, timeout=10)
+    except requests.RequestException as e:
+        print(f"⚠️ Discord alert error: {type(e).__name__}")

@@ -1,76 +1,76 @@
-S&P 500 Stock Data Pipeline
+# Stock Data Pipeline
 
-A mini Data Engineering project created to practice building an end-to-end data pipeline using Python, PostgreSQL, and Docker Compose.
+A small data engineering project: it pulls daily US stock quotes from the Alpha Vantage API, validates them, stores them in PostgreSQL, and builds a summary table for analysis. Everything runs in Docker.
 
-The pipeline fetches daily stock data for 30 major S&P 500 companies from the Alpha Vantage API, handles rate limits, and stores the data cleanly in PostgreSQL without duplicates.
+## Architecture
 
-📌 Features
+```mermaid
+flowchart LR
+    A["Alpha Vantage API"] -->|GLOBAL_QUOTE| B["Python pipeline"]
+    B --> C{"Quality checks"}
+    C -->|pass| D[("raw.daily_stocks")]
+    C -->|fail| E["Skipped and reported in Discord summary"]
+    D -->|"SQL transform"| F[("analytics.daily_stock_summary")]
+    B -->|"run summary"| G["Discord alert"]
+```
 
-API Integration: Fetches daily stock quotes (GLOBAL_QUOTE) from Alpha Vantage.
+1. **Extract** – fetch the latest quote for each ticker (with a timeout, and a delay between calls to respect rate limits).
+2. **Validate** – reject bad data before it reaches the database (see below).
+3. **Load** – upsert valid rows into `raw.daily_stocks`.
+4. **Transform** – compute `daily_change_pct`, `price_range` and `trading_value` into `analytics.daily_stock_summary` with SQL.
+5. **Alert** – send a summary (successes and failures) to Discord.
 
-Rate Limit Handling: Pauses between requests to respect free-tier API limits.
+## Project structure
 
-Idempotent Storage: Uses PostgreSQL UPSERT (ON CONFLICT DO UPDATE) to avoid inserting duplicate records for the same stock on the same day.
+```
+main_pipeline.py      # orchestrates the steps above
+utils/
+  database.py         # connection, table setup, upsert, SQL transform
+  quality.py          # data quality checks
+  alert.py            # Discord webhook
+analytics.sql         # example analysis queries
+docker-compose.yml    # Postgres + pipeline containers
+```
 
-Containerization: Runs the entire stack (PostgreSQL + Python Pipeline) using Docker Compose with a single command.
+## How to run
 
-SQL Analytics: Includes basic SQL scripts to analyze stock prices, volatility, and trading volume.
+```bash
+cp .env.example .env          # then fill in API_KEY, DB_USER, DB_PASS
+docker compose up -d postgres
+docker compose build pipeline
+docker compose run --rm pipeline
+docker exec -i stock_postgres psql -U <DB_USER> -d <DB_NAME> < analytics.sql
+```
 
-🛠️ Tech Stack
+| Variable | Required | Notes |
+|---|---|---|
+| `API_KEY` | yes | free key from Alpha Vantage |
+| `DB_USER`, `DB_PASS` | yes | no defaults in the code |
+| `DB_NAME` | no | defaults to `stock_db` |
+| `DISCORD_WEBHOOK_URL` | no | alerts are skipped if empty |
 
-Language: Python 3.10
+## Design decisions
 
-Database: PostgreSQL 15
+- **Two schemas (`raw` and `analytics`).** Raw data is stored as received; the analytics table is derived from it with SQL, so it can always be rebuilt.
+- **Idempotent loads.** Both tables use `ON CONFLICT (symbol, latest_trading_day) DO UPDATE`, so re-running the pipeline never creates duplicate rows.
+- **Data quality checks before loading.** A row is rejected if a field is missing or non-numeric, a price is not positive, high < low, volume is negative, or the price moved more than 50% from the previous close (possible split or bad data).
+- **One bad ticker never stops the run.** Each ticker is processed in its own `try/except`; failures are collected and reported.
+- **Secrets stay out of the code.** Keys and passwords come from environment variables, and error messages are written so the API key (which is part of the request URL) is never printed.
+- **`daily_change_pct` is measured against the previous close**, which matches how stock sites report daily change.
 
-Libraries: requests, psycopg2-binary, python-dotenv
+## Known limitations
 
-DevOps: Docker & Docker Compose
+- The free Alpha Vantage plan allows 25 requests/day and 5 requests/minute, so the pipeline tracks 10 tickers and waits 12 seconds between calls.
+- `GLOBAL_QUOTE` returns only the latest trading day, so history builds up one day per run.
+- `trading_value` is an estimate (`price * volume`).
+- The SQL transform rebuilds from the whole raw table on every run. That is fine at this size; a larger dataset would need an incremental version.
 
-📁 Project Structure
+## Example output
 
-dataenproject/
-├── main_pipeline.py     # Main ETL script (API -> PostgreSQL)
-├── analytics.sql        # Basic SQL queries for data analysis
-├── Dockerfile           # Docker configuration for Python app
-├── docker-compose.yml   # Multi-container setup (DB + Pipeline)
-├── requirements.txt     # Python dependencies
-├── .env.example         # Template for environment variables
-└── README.md            # Project documentation
+<!-- Paste a screenshot or the result of analytics.sql from your own run here -->
 
+## Next steps
 
-🚀 How to Run
-
-1. Prerequisites
-
-Docker & Docker Desktop installed.
-
-Alpha Vantage API Key (Get a free key here).
-
-2. Setup Environment Variables
-
-Clone the repository and create a .env file from .env.example:
-
-git clone https://github.com/dxkillmy/sp500-stock-etl-pipeline.git
-cd sp500-stock-etl-pipeline
-cp .env.example .env
-
-
-Open .env and put your actual API_KEY.
-
-3. Start the Pipeline
-
-Run the following command to start PostgreSQL and execute the ETL pipeline automatically:
-
-docker compose up --build
-
-
-Note: Because of Alpha Vantage free tier limits (5 requests/min), processing all 30 stocks will take around 5-6 minutes.
-
-4. Run SQL Analytics
-
-To inspect the ingested stock data, run the analysis script inside the running PostgreSQL container:
-
-docker exec -i stock_postgres psql -U root -d stock_db < analytics.sql
-
-
-Created as part of my Data Engineering learning journey.
+- Schedule the pipeline daily with Airflow.
+- Backfill historical prices.
+- Add a dashboard on top of `analytics.daily_stock_summary`.

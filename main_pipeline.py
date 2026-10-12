@@ -1,58 +1,64 @@
 import os
 import time
-import requests
+import yfinance as yf
 from dotenv import load_dotenv
 
+load_dotenv() 
+
 from utils.alert import send_discord_alert
-from utils.quality import validate_data
-from utils.database import get_db_connection, setup_database, save_raw_stock, transform_to_analytics
+from utils.quality import validate_prices
+from utils.database import (
+    get_db_connection, setup_database, load_dim_stock, save_raw_prices, transform_to_analytics,
+)
 
-load_dotenv()
+# 5d = โหมดรายวัน (ดึงย้อนหลัง 5 วัน รันซ้ำได้เพราะเป็น upsert)
+# ครั้งแรกให้ตั้ง PERIOD=1y เพื่อดึงข้อมูลย้อนหลังทั้งปี
+PERIOD = os.getenv("PERIOD", "5d")
 
-API_KEY = os.getenv("API_KEY")
-STOCKS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"]
+
+def fetch_prices(symbol):
+    try:
+        df = yf.Ticker(symbol).history(period=PERIOD, auto_adjust=False)
+    except Exception as e:
+        raise RuntimeError(f"download failed ({type(e).__name__})") from None
+    if df.empty:
+        raise RuntimeError("no data returned")
+    df.index = df.index.date
+    return df
+
 
 def run_pipeline():
-    send_discord_alert("🚀 **Starting Stock Data Pipeline execution...**")
-    
-    try:
-        conn = get_db_connection()
-        setup_database(conn)
-    except Exception as e:
-        err_msg = f"❌ **Database Connection Failed:** {e}"
-        print(err_msg)
-        send_discord_alert(err_msg)
-        return
+    send_discord_alert(f" Starting Stock Data Pipeline (period={PERIOD})")
+    conn = get_db_connection()
+    setup_database(conn)
+    symbols = load_dim_stock(conn)
 
-    success_count, rejected_count = 0, 0
-
-    for symbol in STOCKS:
-        url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={API_KEY}"
-        res = requests.get(url).json()
-
-        if "Global Quote" in res and res["Global Quote"]:
-            quote = res["Global Quote"]
-            is_valid, reason = validate_data(symbol, quote)
-
-            if is_valid:
-                save_raw_stock(conn, symbol, quote)
-                print(f"✅ [Data Quality PASSED] Ingested {symbol}")
-                success_count += 1
-            else:
-                print(f"⚠️ [Data Quality FAILED] Rejected {symbol}: {reason}")
-                rejected_count += 1
-        else:
-            print(f"⚠️ Fetching failed or rate limited for {symbol}")
-            rejected_count += 1
-
-        time.sleep(2)
+    success, failed, bad_rows = 0, [], 0
+    for symbol in symbols:
+        try:
+            df = fetch_prices(symbol)
+            df, rejected = validate_prices(df)
+            bad_rows += rejected
+            if df.empty:
+                raise ValueError("all rows rejected by quality checks")
+            save_raw_prices(conn, symbol, df)
+            print(f"✅ Ingested {symbol} ({len(df)} rows)")
+            success += 1
+        except Exception as e:  # หุ้นตัวเดียวพัง ต้องไม่ทำให้ตัวอื่นหยุดตาม
+            print(f"⚠️ {symbol} failed: {e}")
+            failed.append(symbol)
+        time.sleep(1)
 
     transform_to_analytics(conn)
     conn.close()
 
-    summary_msg = f"🎉 **Pipeline Completed!**\n- Successful: `{success_count}`\n- Rejected/Failed: `{rejected_count}`"
-    print(summary_msg)
-    send_discord_alert(summary_msg)
+    send_discord_alert(
+        f" Pipeline Completed!\n Successful: `{success}`\n Failed: `{failed}`\n"
+        f" Rows rejected by quality checks: `{bad_rows}`"
+    )
+    if not success:
+        raise SystemExit(1)
+
 
 if __name__ == "__main__":
     run_pipeline()
