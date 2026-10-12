@@ -1,0 +1,10 @@
+FROM apache/airflow:3.3.2
+
+COPY --chown=airflow:0 requirements.txt /tmp/requirements.txt
+RUN python -m venv /opt/airflow/pipeline-venv \
+    && /opt/airflow/pipeline-venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
+
+COPY --chown=airflow:0 main_pipeline.py /opt/airflow/pipeline/main_pipeline.py
+COPY --chown=airflow:0 utils/ /opt/airflow/pipeline/utils/
+COPY --chown=airflow:0 data/ /opt/airflow/pipeline/data/
+COPY --chown=airflow:0 dags/ /opt/airflow/dags/

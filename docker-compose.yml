@@ -31,5 +31,27 @@ services:
       - PERIOD=${PERIOD:-5d}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
 
+  airflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    container_name: stock_airflow
+    command: standalone
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
+      - AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS=true
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-stock_db}
+      - DB_USER=${DB_USER:-root}
+      - DB_PASS=${DB_PASS:-1234}
+      - PERIOD=5d
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
 volumes:
   postgres_data:
