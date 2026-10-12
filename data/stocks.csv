@@ -1,0 +1,21 @@
+ticker,company_name,sector,sub_industry
+AAPL,Apple,Information Technology,"Technology Hardware, Storage & Peripherals"
+MSFT,Microsoft,Information Technology,Systems Software
+NVDA,NVIDIA,Information Technology,Semiconductors
+GOOGL,Alphabet (Class A),Communication Services,Interactive Media & Services
+META,Meta Platforms,Communication Services,Interactive Media & Services
+AMZN,Amazon,Consumer Discretionary,Broadline Retail
+TSLA,Tesla,Consumer Discretionary,Automobile Manufacturers
+HD,Home Depot,Consumer Discretionary,Home Improvement Retail
+JPM,JPMorgan Chase,Financials,Diversified Banks
+V,Visa,Financials,Transaction & Payment Processing Services
+WMT,Walmart,Consumer Staples,Consumer Staples Merchandise Retail
+PG,Procter & Gamble,Consumer Staples,Household Products
+JNJ,Johnson & Johnson,Health Care,Pharmaceuticals
+LLY,Eli Lilly,Health Care,Pharmaceuticals
+UNH,UnitedHealth Group,Health Care,Managed Health Care
+XOM,ExxonMobil,Energy,Integrated Oil & Gas
+CAT,Caterpillar,Industrials,Construction Machinery & Heavy Transportation Equipment
+NEE,NextEra Energy,Utilities,Electric Utilities
+AMT,American Tower,Real Estate,Telecom Tower REITs
+LIN,Linde,Materials,Industrial Gases
