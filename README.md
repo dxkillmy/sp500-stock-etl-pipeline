@@ -37,8 +37,8 @@ The star schema is `dim_stock` (ticker, company, sector, sub-industry, loaded fr
 You need Docker and Git.
 
 ```bash
-git clone https://github.com/dxkillmy/sp500-stock-etl-pipeline.git
-cd sp500-stock-etl-pipeline
+git clone https://github.com/dxkillmy/us-stock-data-pipeline
+cd us-stock-data-pipeline
 cp .env.example .env      
 
 docker compose up -d postgres
