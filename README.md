@@ -1,98 +1,66 @@
-# S&P 500 Data Pipeline & Analytics Warehouse
+# US Stock Data Pipeline
 
-An automated, fault-tolerant ETL pipeline that ingests daily stock market data, applies data quality gates, and transforms raw prices into an analytics-ready Star Schema using PostgreSQL and Apache Airflow.
+Every weekday after the US market closes, Airflow runs a Python script that downloads daily prices for 20 US stocks from yfinance, checks the data, and loads it into PostgreSQL as a star schema. Everything runs in Docker Compose. I built it to practice the basics of data engineering: pulling data from an API, cleaning it, modeling it, scheduling it, and making reruns safe.
 
----
+![Airflow DAG run](docs/airflow.png)
 
-## Architecture & Data Flow
+## How it works
 
-[ yfinance API ]
-│
-▼
-[ Data Quality Gate ] ── (Filter nulls, negative prices, invalid High/Low)
-│
-▼
-[ PostgreSQL: raw.stock_prices ] ── (Raw layer, Upsert via ON CONFLICT)
-│
-▼
-[ SQL Transformations ] ── (In-DB Window Functions: % Change, SMA-20)
-│
-▼
-[ PostgreSQL: analytics.fact_stock_prices ] ── (Presentation layer)
-│
-▼
-[ Discord Webhook / Airflow DAG ] ── (Alerting & Orchestration)
+```
+Airflow (weekdays, 17:00 New York time) runs main_pipeline.py:
 
----
+  yfinance
+     │
+     ▼
+  Data quality checks   (missing values, non-positive prices, high < low, negative volume)
+     │
+     ▼
+  raw.stock_prices      (upsert on ticker + trade_date)
+     │
+     ▼
+  SQL transform         (daily change % using LAG)
+     │
+     ▼
+  analytics.fact_stock_prices  +  analytics.dim_stock (sector info)
 
-## 🛠️ Key Technical Features
+Discord gets a message when a run starts and a summary when it ends.
+```
 
-* **Medallion Architecture**: Separates immutable raw ingestion (`raw.stock_prices`) from presentation analytics (`analytics.fact_stock_prices`).
-* **Idempotent Ingestion**: Handles rerun safety and backfills using PostgreSQL `ON CONFLICT (ticker, trade_date) DO UPDATE` (Upsert logic).
-* **Data Quality Checks**: Intercepts corrupt data before database writes (filters out negative bounds, `High < Low` anomalies, and missing values).
-* **Fault Isolation**: Exception handling inside ingestion loops guarantees individual symbol failures do not crash the pipeline.
-* **In-Database Analytics**: Computes financial indicators (Daily Change %, 20-Day Simple Moving Average) directly inside PostgreSQL using SQL Window Functions (`LAG`, `OVER`).
-* **Orchestration & Observability**: Scheduled via Apache Airflow with real-time Discord notifications reporting ingestion summary and rejected rows.
+- **Reruns are safe** Both tables use `ON CONFLICT (ticker, trade_date) DO UPDATE`, so a second run never creates duplicate rows.
+- **One bad ticker does not stop the run** Each ticker has its own `try/except`. Failures and the number of rejected rows show up in the Discord summary, and Airflow retries a failed run twice.
+- **Secrets stay out of the code** The database login comes from `.env`, which is git-ignored.
 
----
+The star schema is `dim_stock` (ticker, company, sector, sub-industry, loaded from `data/stocks.csv`) and `fact_stock_prices` (ticker, trade date, open/high/low/close, volume, daily change % versus the previous close). Example queries are in `analytics.sql`.
 
-## Data Model (Star Schema)
+## Run it
 
-### `analytics.dim_stock`
-| Column | Type | Description |
-| :--- | :--- | :--- |
-| `ticker` | VARCHAR(10) | Primary Key (e.g., AAPL, NVDA) |
-| `company_name` | TEXT | Company name |
-| `sector` | TEXT | GICS Sector |
-| `sub_industry` | TEXT | GICS Sub-Industry |
+You need Docker and Git.
 
-### `analytics.fact_stock_prices`
-| Column | Type | Description |
-| :--- | :--- | :--- |
-| `ticker` | VARCHAR(10) | Foreign Key -> `dim_stock.ticker` |
-| `trade_date` | DATE | Composite Primary Key |
-| `open` / `high` / `low` / `close` | NUMERIC(12,4) | Daily stock prices |
-| `volume` | BIGINT | Trading volume |
-| `daily_change_pct` | NUMERIC(10,2) | Daily price movement (%) calculated via SQL |
-
----
-
-## Quick Start
-
-### 1. Prerequisites
-* Docker & Docker Compose
-* Git
-
-### 2. Setup Environment
-Clone the repository and set up environment variables:
 ```bash
 git clone https://github.com/dxkillmy/sp500-stock-etl-pipeline.git
 cd sp500-stock-etl-pipeline
-cp .env.example .env
+cp .env.example .env      
+
+docker compose up -d postgres
+PERIOD=1y docker compose run --rm pipeline 
+docker exec -i stock_postgres psql -U root -d stock_db < analytics.sql
+
+docker compose up -d airflow
 ```
 
-### 3. Run Pipeline via Docker Compose
-Start PostgreSQL, Airflow, and database migrations:
-```bash
-docker compose up -d
-```
+The Airflow login is turned off, so only use it on your own machine. Run the pipeline by hand any time with `docker compose run --rm pipeline`. After changing the Python code, rebuild with `docker compose build`.
 
-### 4. Run Pipeline Manually (Optional)
-To trigger the ETL script outside of Airflow:
-```bash
-docker exec -it stock_postgres python main_pipeline.py
+## What I ran into
 
-Sample Analytics Query
-20-Day Moving Average (SMA 20) for Apple (AAPL):
-```SQL
-SELECT 
-    trade_date, 
-    close,
-    ROUND(AVG(close) OVER (
-        ORDER BY trade_date 
-        ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
-    ), 2) AS sma_20
-FROM analytics.fact_stock_prices
-WHERE ticker = 'AAPL'
-ORDER BY trade_date DESC
-LIMIT 10;
+- The free Alpha Vantage key only allows 25 requests per day, which is too few for many tickers, so I switched to yfinance.
+- My first "daily change" compared the price with the day's open. It did not match stock sites, so I changed it to compare with the previous close.
+- After I changed the code, the container kept running the old version until I rebuilt the image.
+- `CREATE TABLE IF NOT EXISTS` does not change a table that already exists, so when I added a column I dropped and recreated the schemas (fine in development, not with real data).
+
+## Limitations
+
+- yfinance is an unofficial library meant for personal and learning use. It can change or be rate limited.
+- Only 20 tickers. The sector labels in `data/stocks.csv` were typed by hand and may not match the latest GICS names.
+- Airflow runs in `standalone` mode, which is meant for learning and small setups. It only runs while Docker is running on the machine.
+- If the pipeline runs while the market is open, the latest row is a partial-day price until the next run replaces it.
+- Tests cover the data quality checks only, not the database code.
